@@ -6,6 +6,9 @@
 #include <AtlServer/AtlServer.h>
 #include <AtlServer/AtlServer_i.c>
 #include <ComUtility/Utility.h>
+#include <ComUtility/SynchronizationContext.h>
+#include <ctxtcall.h>
+#include <comsvcs.h>
 #include <winrt/base.h>
 #include <wrl.h>
 #include "Mocks/IHenMock.h"
@@ -116,6 +119,58 @@ TEST(AtlHenTests, RequireThat_Cluck_IsExecutedOnMainThread_WhenCalledFromWorkerT
         PostThreadMessage(mainThreadId, WM_QUIT, 0, 0);
     } };
 
+    // Pump messages from COM runtime to allow function calls from worker thread to
+    // main thread to be processed. This is how COM allows communication between threads.
+    MSG message{};
+    while (const auto result = GetMessage(&message, 0, 0, 0))
+    {
+        if (-1 != result)
+            DispatchMessage(&message);
+    }
+
+    thread.join();
+}
+
+// Test that demonstrates to use context
+TEST(AtlHenTests, RequireThat_AtlHen_CanBeCreatedOnContext)
+{
+    const auto mainThreadId = GetCurrentThreadId();
+
+    auto observer = make_self<IAsyncCluckObserverMock>();
+    EXPECT_CALL(*observer, OnCluck()).WillOnce(Invoke([mainThreadId]
+        {
+            EXPECT_EQ(GetCurrentThreadId(), mainThreadId);
+            return S_OK; // Feel free to put a breakpoint here, and see which thread we are called on
+        }));
+
+    const auto agileObserver = AgilePtr<IAsyncCluckObserver>(observer);
+
+    SynchronizationContext mainContext;
+
+    std::thread thread{ [&mainContext, agileObserver, mainThreadId]
+    {
+        ComRuntime runtime{Apartment::MultiThreaded};
+
+        SetThreadDescription(GetCurrentThread(), L"Worker thread"); // Help debugging
+        {
+            AgileRef agileHen = mainContext.Send([]
+                {
+                    AgileRef agileHen;
+                    ComPtr<IHen> hen;
+                    HR(CoCreateInstance(CLSID_AtlHen, nullptr, CLSCTX_INPROC_SERVER, IID_IHen, &hen));
+                    HR(hen.AsAgile(&agileHen));
+                    return agileHen;
+                });
+
+            ComPtr<IHen> hen;
+            HR(agileHen.As(&hen));
+
+            hen->CluckAsync(agileObserver.Get());
+        }
+        // Notify main thread that it can now exit its message loop
+        PostThreadMessage(mainThreadId, WM_QUIT, 0, 0);
+    } };
+    
     // Pump messages from COM runtime to allow function calls from worker thread to
     // main thread to be processed. This is how COM allows communication between threads.
     MSG message{};

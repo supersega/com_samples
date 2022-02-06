@@ -11,12 +11,16 @@
     </ClInclude>
     <ClInclude Include="ComApartment.h" />
     <ClInclude Include="ThreadSafeQueue.h" />
+    <ClInclude Include="Include\ComUtility\SynchronizationContext.h">
+      <Filter>Include\ComUtility</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="pch.cpp" />
     <ClCompile Include="Utility.cpp" />
     <ClCompile Include="ComApartment.cpp" />
     <ClCompile Include="ComFactory.cpp" />
+    <ClCompile Include="SynchronizationContext.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Include">
