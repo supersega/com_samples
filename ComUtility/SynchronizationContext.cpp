@@ -15,7 +15,7 @@ struct SynchronizationContext::Context
     Context()
     {
         HR(CoGetObjectContext(IID_PPV_ARGS(&m_callback)));
-        m_poster = std::jthread([this]
+        m_poster = std::jthread([this](std::stop_token stoken)
         {
             // Using std::thread instead async gives guaranty that COM initialized as we want
             ComRuntime rt(Apartment::MultiThreaded);
@@ -23,15 +23,15 @@ struct SynchronizationContext::Context
             while (true)
             {
                 // Optimization to avoid lock m_messages_mutex if we if we was notified about cancellation in this point
-                if (m_cancel.load())
+                if (stoken.stop_requested())
                     break;
 
                 std::unique_lock<std::mutex> lock(m_messages_mutex);
                 // Let us wait for elements or cancellation, this will give OS chance to use thread efficiently
-                m_wakeup.wait(lock, [=] { return !m_messages.empty() || m_cancel.load(std::memory_order_relaxed); });
+                m_wakeup.wait(lock, stoken, [=] { return !m_messages.empty(); });
                 // If cancellation requested, then we done (std::cancellation_token is C++ 20)
                 // We can make load relaxed here, because we already did check under mutex in wait
-                if (m_cancel.load(std::memory_order_relaxed))
+                if (stoken.stop_requested())
                     break;
 
                 auto task = std::move(m_messages.front());
@@ -45,18 +45,7 @@ struct SynchronizationContext::Context
         });
     }
 
-    ~Context()
-    {
-        // Before join post cancellation to exit from message loop
-        // Do it under mutex to avoid deadlocks see: 
-        // http://www.modernescpp.com/index.php/c-core-guidelines-be-aware-of-the-traps-of-condition-variables and
-        // https://stackoverflow.com/questions/36126286/using-stdcondition-variable-with-atomicbool
-        {
-            std::unique_lock<std::mutex> lock(m_messages_mutex);
-            m_cancel.store(true, std::memory_order_relaxed);
-        }
-        m_wakeup.notify_one();
-    }
+    ~Context() = default;
 
     void Schedule(std::function<void()>&& fn)
     {
@@ -81,12 +70,13 @@ struct SynchronizationContext::Context
     }
 
     ATL::CComPtr<IContextCallback> m_callback;
-    std::jthread m_poster;
     std::queue<std::function<void()>> m_messages;
     std::mutex m_messages_mutex;
-    std::condition_variable m_wakeup;
-    std::atomic_bool m_cancel = false;
+    std::condition_variable_any m_wakeup;
     const std::thread::id m_thread_id = std::this_thread::get_id();
+    // This should be the last variable to allow automatic stop on join
+    // If it is not the last, then everything that goes after will be destroyed
+    std::jthread m_poster;
 };
 
 SynchronizationContext::SynchronizationContext() : m_context(std::make_unique<SynchronizationContext::Context>()) { }
