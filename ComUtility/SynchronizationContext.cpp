@@ -15,7 +15,7 @@ struct SynchronizationContext::Context
     Context()
     {
         HR(CoGetObjectContext(IID_PPV_ARGS(&m_callback)));
-        m_poster = std::thread([this]
+        m_poster = std::jthread([this]
         {
             // Using std::thread instead async gives guaranty that COM initialized as we want
             ComRuntime rt(Apartment::MultiThreaded);
@@ -56,7 +56,6 @@ struct SynchronizationContext::Context
             m_cancel.store(true, std::memory_order_relaxed);
         }
         m_wakeup.notify_one();
-        m_poster.join();
     }
 
     void Schedule(std::function<void()>&& fn)
@@ -82,12 +81,12 @@ struct SynchronizationContext::Context
     }
 
     ATL::CComPtr<IContextCallback> m_callback;
-    std::thread m_poster;
+    std::jthread m_poster;
     std::queue<std::function<void()>> m_messages;
     std::mutex m_messages_mutex;
     std::condition_variable m_wakeup;
     std::atomic_bool m_cancel = false;
-    std::thread::id m_thread_id = std::this_thread::get_id();
+    const std::thread::id m_thread_id = std::this_thread::get_id();
 };
 
 SynchronizationContext::SynchronizationContext() : m_context(std::make_unique<SynchronizationContext::Context>()) { }
